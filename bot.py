@@ -10,12 +10,8 @@ from telegram.ext import (
     filters,
 )
 
-# --- Настройки ---
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "ВАШ_TELEGRAM_TOKEN")
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "ВАШ_ANTHROPIC_KEY")
-
-# Опционально: разрешить только определённые Telegram ID
-# ALLOWED_USER_IDS = {123456789}  # Раскомментировать и добавить свой ID
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -24,14 +20,13 @@ logging.basicConfig(
 
 client = Anthropic(api_key=ANTHROPIC_API_KEY)
 
-# Храним историю переписки для каждого пользователя
 conversation_history: dict[int, list] = {}
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Привет! Я Claude — AI-ассистент от Anthropic.\n"
-        "Просто напиши мне что-нибудь, и я отвечу.\n\n"
+        "Могу отвечать на любые вопросы, включая погоду, новости и актуальную информацию.\n\n"
         "Команды:\n"
         "/start — это сообщение\n"
         "/clear — очистить историю диалога\n"
@@ -57,26 +52,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_text = update.message.text
 
-    # Опциональная проверка доступа
-    # if user_id not in ALLOWED_USER_IDS:
-    #     await update.message.reply_text("Доступ запрещён.")
-    #     return
-
-    # Инициализируем историю если нет
     if user_id not in conversation_history:
         conversation_history[user_id] = []
 
-    # Добавляем сообщение пользователя
     conversation_history[user_id].append({
         "role": "user",
         "content": user_text,
     })
 
-    # Ограничиваем историю последними 20 сообщениями
     if len(conversation_history[user_id]) > 20:
         conversation_history[user_id] = conversation_history[user_id][-20:]
 
-    # Показываем индикатор набора
     await context.bot.send_chat_action(
         chat_id=update.effective_chat.id, action="typing"
     )
@@ -85,19 +71,30 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response = client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=2048,
-            system="Ты полезный ассистент Claude. Отвечай на языке пользователя.",
+            system="Ты полезный ассистент Claude. Отвечай на языке пользователя. У тебя есть доступ к интернету — используй поиск для актуальных данных: погода, новости, курсы валют и т.д.",
             messages=conversation_history[user_id],
+            tools=[
+                {
+                    "type": "web_search_20250305",
+                    "name": "web_search",
+                }
+            ],
         )
 
-        assistant_reply = response.content[0].text
+        # Собираем финальный текстовый ответ
+        assistant_reply = ""
+        for block in response.content:
+            if block.type == "text":
+                assistant_reply += block.text
 
-        # Сохраняем ответ в историю
+        if not assistant_reply:
+            assistant_reply = "Не удалось получить ответ. Попробуй ещё раз."
+
         conversation_history[user_id].append({
             "role": "assistant",
             "content": assistant_reply,
         })
 
-        # Telegram ограничивает сообщения до 4096 символов
         if len(assistant_reply) > 4096:
             for i in range(0, len(assistant_reply), 4096):
                 await update.message.reply_text(assistant_reply[i:i+4096])
@@ -107,7 +104,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logging.error(f"Ошибка API: {e}")
         await update.message.reply_text(
-            f"Произошла ошибка при обращении к Claude. Попробуй ещё раз.\n({e})"
+            f"Произошла ошибка. Попробуй ещё раз.\n({e})"
         )
 
 
